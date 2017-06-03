@@ -85,7 +85,7 @@ public OnPluginStart()
 	
 	RegConsoleCmd("sm_wr", Command_WorldRecord);
 	RegConsoleCmd("sm_delete", Command_Delete);
-	RegConsoleCmd("sm_record", Command_PersonalRecord);
+	RegConsoleCmd("sm_pr", Command_PersonalRecord);
 	RegConsoleCmd("sm_reloadcache", Command_ReloadCache);
 	
 	RegAdminCmd("sm_deleterecord_all", Command_DeleteRecord_All, ADMFLAG_RCON, "sm_deleterecord_all STEAM_ID");
