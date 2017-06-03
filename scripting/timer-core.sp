@@ -40,6 +40,17 @@ enum BestTimeCacheEntity
 	Float:Time
 }
 
+enum CacheFinish
+{
+	Float:PreviousTime,
+	Float:Time,
+	Jumps,
+	Flashbangs,
+	PhysicsDifficultyTemp,
+	Fpsmax,
+	bool:BOverwrite
+}
+
 /**
 * Global Variables
 */
@@ -53,6 +64,9 @@ new g_bestTimeCache[MAXPLAYERS+1][BestTimeCacheEntity];
 
 new g_iTotalRankCache;
 new g_iCurrentRankCache[MAXPLAYERS+1];
+
+new cacheFinishes[MAXPLAYERS+1][CacheFinish];
+new String:timeDiffCache[32];
 
 new Handle:g_hTimerStartedForward;
 new Handle:g_hTimerStoppedForward;
@@ -462,7 +476,7 @@ bool:GetBestRecord(client, const String:map[] = "", difficulty = -1, &Float:time
 	decl String:sAuthID[MAX_AUTHID_LENGTH];
 	GetClientAuthString(client, sAuthID, sizeof(sAuthID));
 	
-	decl String:sQuery[255], String:sError[255];
+	decl String:sQuery[255];
 	FormatEx(sQuery, sizeof(sQuery), "SELECT id, map, auth, time, jumps, flashbangs FROM round WHERE auth = '%s'", sAuthID);
 
 	if (!StrEqual(map, ""))
@@ -477,53 +491,46 @@ bool:GetBestRecord(client, const String:map[] = "", difficulty = -1, &Float:time
 
 	Format(sQuery, sizeof(sQuery), "%s ORDER BY time ASC LIMIT 1", sQuery);
 	
-	SQL_LockDatabase(g_hSQL);
-
-	new Handle:hQuery = SQL_Query(g_hSQL, sQuery);
+	SQL_TQuery(g_hSQL, GetBestRecordCallback, sQuery, client);
 	
+	return true;
+}
+
+public GetBestRecordCallback(Handle:owner, Handle:hQuery, const String:sError[], any:client)
+{
 	if (hQuery == INVALID_HANDLE)
 	{
-		SQL_GetError(g_hSQL, sError, sizeof(sError));
 		Timer_LogError("SQL Error on GetBestRound: %s", sError);
-		SQL_UnlockDatabase(g_hSQL);
 		
 		g_bestTimeCache[client][IsCached] = true;
 		g_bestTimeCache[client][Time] = 0.0;
 		g_bestTimeCache[client][Jumps] = 0;	
 		g_bestTimeCache[client][Flashbangs] = 0;
-
-		return false;
-	}
-
-	SQL_UnlockDatabase(g_hSQL); 
-
-	if (SQL_FetchRow(hQuery))
-	{			
-		time = SQL_FetchFloat(hQuery, 3);
-		jumps = SQL_FetchInt(hQuery, 4);
-		flashbangs = SQL_FetchInt(hQuery, 5);
-		
-		g_bestTimeCache[client][IsCached] = true;
-		g_bestTimeCache[client][Time] = time;
-		g_bestTimeCache[client][Jumps] = jumps;
-		g_bestTimeCache[client][Flashbangs] = flashbangs;
-		
-		GetCurrentRank(client, g_sCurrentMap);
-		
-		CloseHandle(hQuery);
+		return;
 	}
 	else
 	{
-		g_bestTimeCache[client][IsCached] = true;
-		g_bestTimeCache[client][Time] = 0.0;
-		g_bestTimeCache[client][Jumps] = 0;	
-		g_bestTimeCache[client][Flashbangs] = 0;
-		
-		CloseHandle(hQuery);
-		return false;
+		if (SQL_FetchRow(hQuery))
+		{			
+			new Float:time = SQL_FetchFloat(hQuery, 3);
+			new jumps = SQL_FetchInt(hQuery, 4);
+			new flashbangs = SQL_FetchInt(hQuery, 5);
+			
+			g_bestTimeCache[client][IsCached] = true;
+			g_bestTimeCache[client][Time] = time;
+			g_bestTimeCache[client][Jumps] = jumps;
+			g_bestTimeCache[client][Flashbangs] = flashbangs;
+			
+			GetCurrentRank(client, g_sCurrentMap);
+		}
+		else
+		{
+			g_bestTimeCache[client][IsCached] = true;
+			g_bestTimeCache[client][Time] = 0.0;
+			g_bestTimeCache[client][Jumps] = 0;	
+			g_bestTimeCache[client][Flashbangs] = 0;
+		}
 	}
-	
-	return true;
 }
 
 ClearCache()
@@ -554,17 +561,120 @@ FinishRound(client, const String:map[], Float:time, jumps, flashbangs, physicsDi
 		return;
 	}
 	
-	new Float:fLastTime;
-	new iLastJumps, iLastFlashbangs;
-	decl String:sTimeDiff[32], String:sBuffer[32];
-	new bool:bOverwrite = false;
+	cacheFinishes[client][PreviousTime] = 0.0;
+	cacheFinishes[client][Time] = time;
+	cacheFinishes[client][Jumps] = jumps;
+	cacheFinishes[client][Flashbangs] = flashbangs;
+	cacheFinishes[client][PhysicsDifficultyTemp] = physicsDifficulty;
+	cacheFinishes[client][Fpsmax] = fpsmax;
+	cacheFinishes[client][BOverwrite] = false;
 	
-	Timer_GetBestRound(client, map, fLastTime, iLastJumps, iLastFlashbangs);
+	if (g_bestTimeCache[client][IsCached])
+	{
+		FinishMain(client, map);
+	}
+	else
+	{
+		decl String:sAuthID[MAX_AUTHID_LENGTH];
+		GetClientAuthString(client, sAuthID, sizeof(sAuthID));
+		
+		decl String:sQuery[255];
+		Format(sQuery, sizeof(sQuery), "SELECT id, map, auth, time, jumps, flashbangs FROM round WHERE auth = '%s'", sAuthID);
+
+		if (!StrEqual(map, ""))
+		{
+			Format(sQuery, sizeof(sQuery), "%s AND map='%s'", sQuery, map);
+		}
+
+		if (physicsDifficulty != -1)
+		{
+			Format(sQuery, sizeof(sQuery), "%s AND physicsdifficulty=%d", sQuery, physicsDifficulty);
+		}
+
+		Format(sQuery, sizeof(sQuery), "%s ORDER BY time ASC LIMIT 1", sQuery);
+		
+		SQL_TQuery(g_hSQL, GetBestRecordFinishCallback, sQuery, client);
+	}
+}
+
+public GetBestRecordFinishCallback(Handle:owner, Handle:hQuery, const String:sError[], any:client)
+{
+	if (hQuery == INVALID_HANDLE)
+	{
+		Timer_LogError("SQL Error on GetBestRecordFinishCallback: %s", sError);
+		g_bestTimeCache[client][IsCached] = true;
+		g_bestTimeCache[client][Time] = 0.0;
+		g_bestTimeCache[client][Jumps] = 0;	
+		g_bestTimeCache[client][Flashbangs] = 0;
+	}
+	else
+	{
+		if (SQL_GetRowCount(hQuery) > 0)
+		{
+			if (SQL_FetchRow(hQuery))
+			{
+				new Float:time = SQL_FetchFloat(hQuery, 3);
+				new jumps = SQL_FetchInt(hQuery, 4);
+				new flashbangs = SQL_FetchInt(hQuery, 5);
+				
+				g_bestTimeCache[client][IsCached] = true;
+				g_bestTimeCache[client][Time] = time;
+				g_bestTimeCache[client][Jumps] = jumps;
+				g_bestTimeCache[client][Flashbangs] = flashbangs;
+				cacheFinishes[client][PreviousTime] = time;
+				
+				decl String:sQuery[512];
+				FormatEx(sQuery, sizeof(sQuery), "SELECT m.id, m.auth, m.time, MAX(m.jumps) jumps, m.physicsdifficulty, m.name FROM round AS m INNER JOIN (SELECT MIN(n.time) time, n.auth FROM round n WHERE n.map = '%s' AND n.time <= %f GROUP BY n.physicsdifficulty, n.auth) AS j ON (j.time = m.time AND j.auth = m.auth) WHERE m.map = '%s' AND m.time <= %f GROUP BY m.physicsdifficulty, m.auth", g_sCurrentMap, g_bestTimeCache[client][Time] + 0.0001, g_sCurrentMap, g_bestTimeCache[client][Time] + 0.0001);
+
+				SQL_TQuery(g_hSQL, GetCurrentRankFinishCallback, sQuery, client);
+			}
+			else
+			{
+				g_bestTimeCache[client][IsCached] = true;
+				g_bestTimeCache[client][Time] = 0.0;
+				g_bestTimeCache[client][Jumps] = 0;	
+				g_bestTimeCache[client][Flashbangs] = 0;
+				
+				FinishMain(client, g_sCurrentMap);
+			}
+		}
+		else
+		{
+			g_bestTimeCache[client][IsCached] = true;
+			g_bestTimeCache[client][Time] = 0.0;
+			g_bestTimeCache[client][Jumps] = 0;	
+			g_bestTimeCache[client][Flashbangs] = 0;
+			
+			FinishMain(client, g_sCurrentMap);
+		}
+	}
+}
+
+public GetCurrentRankFinishCallback(Handle:owner, Handle:hQuery, const String:sError[], any:client)
+{
+	if (hQuery == INVALID_HANDLE)
+	{
+		Timer_LogError("SQL Error on GetCurrentRank: %s", sError);
+		return;
+	}
+	else
+	{
+		g_iCurrentRankCache[client] = SQL_GetRowCount(hQuery);
+		
+		FinishMain(client, g_sCurrentMap);
+	}
+}
+
+FinishMain(client, const String:map[])
+{
+	decl String:sTimeDiff[32], String:sBuffer[32];
+	new Float:fLastTime = cacheFinishes[client][PreviousTime];
+	new Float:time = cacheFinishes[client][Time];
 	
 	if(fLastTime == 0.0)
 	{
 		g_bestTimeCache[client][Time] = time;
-		bOverwrite = true;
+		cacheFinishes[client][BOverwrite] = true;
 	}
 	fLastTime -= time;			
 	if(fLastTime < 0.0)
@@ -576,7 +686,7 @@ FinishRound(client, const String:map[], Float:time, jumps, flashbangs, physicsDi
 	else if(fLastTime > 0.0)
 	{
 		g_bestTimeCache[client][Time] = time;
-		bOverwrite = true;
+		cacheFinishes[client][BOverwrite] = true;
 		Timer_SecondsToTime(fLastTime, sBuffer, sizeof(sBuffer), true);
 		FormatEx(sTimeDiff, sizeof(sTimeDiff), "-%s", sBuffer);
 	}
@@ -585,6 +695,7 @@ FinishRound(client, const String:map[], Float:time, jumps, flashbangs, physicsDi
 		Timer_SecondsToTime(fLastTime, sBuffer, sizeof(sBuffer), true);
 		FormatEx(sTimeDiff, sizeof(sTimeDiff), "%s", sBuffer);
 	}
+	timeDiffCache = sTimeDiff;
 	
 	decl String:sAuthID[MAX_AUTHID_LENGTH];
 	GetClientAuthString(client, sAuthID, sizeof(sAuthID));
@@ -595,94 +706,126 @@ FinishRound(client, const String:map[], Float:time, jumps, flashbangs, physicsDi
 	decl String:sSafeName[2 * strlen(sName) + 1];
 	SQL_EscapeString(g_hSQL, sName, sSafeName, 2 * strlen(sName) + 1);
 
-	decl String:sQuery[256], String:sError[255];
-	FormatEx(sQuery, sizeof(sQuery), "INSERT INTO round (map, auth, time, jumps, physicsdifficulty, name, fpsmax, flashbangs) VALUES ('%s', '%s', %f, %d, %d, '%s', %d, %d);", map, sAuthID, time, jumps, physicsDifficulty, sSafeName, fpsmax, flashbangs);
+	decl String:sQuery[256];
+	FormatEx(sQuery, sizeof(sQuery), "INSERT INTO round (map, auth, time, jumps, physicsdifficulty, name, fpsmax, flashbangs) VALUES ('%s', '%s', %f, %d, %d, '%s', %d, %d);", map, sAuthID, cacheFinishes[client][Time], cacheFinishes[client][Jumps], cacheFinishes[client][PhysicsDifficultyTemp], sSafeName, cacheFinishes[client][Fpsmax], cacheFinishes[client][Flashbangs]);
 	
-	SQL_LockDatabase(g_hSQL);
+	SQL_TQuery(g_hSQL, FinishRoundCallback, sQuery, client);
+	
+	return true;
+}
 
-	new Handle:hQuery = SQL_Query(g_hSQL, sQuery);
-	
+public FinishRoundCallback(Handle:owner, Handle:hQuery, const String:sError[], any:client)
+{
 	if (hQuery == INVALID_HANDLE)
 	{
-		SQL_GetError(g_hSQL, sError, sizeof(sError));
 		Timer_LogError("SQL Error on FinishRound: %s", sError);
-		SQL_UnlockDatabase(g_hSQL);
 		return;
 	}
+	else
+	{
+		g_bestTimeCache[client][IsCached] = false;
+		
+		GetTotalRank(g_sCurrentMap);
+		
+		decl String:sQuery[448];
+		FormatEx(sQuery, sizeof(sQuery), "SELECT m.id, m.auth, m.time, MAX(m.jumps) jumps, m.physicsdifficulty, m.name FROM round AS m INNER JOIN (SELECT MIN(n.time) time, n.auth FROM round n WHERE n.map = '%s' GROUP BY n.physicsdifficulty, n.auth) AS j ON (j.time = m.time AND j.auth = m.auth) WHERE m.map = '%s' GROUP BY m.physicsdifficulty, m.auth", g_sCurrentMap, g_sCurrentMap);
+		SQL_TQuery(g_hSQL, GetTotalRankFinishCallback, sQuery, client);
+	}
+}
 
-	SQL_UnlockDatabase(g_hSQL); 
-	
-	CloseHandle(hQuery);
-	
-	g_bestTimeCache[client][IsCached] = false;
-	
-	GetTotalRank(g_sCurrentMap);
-	GetCurrentRank(client, g_sCurrentMap);
-	
-	decl String:sTimeString[32];
-	Timer_SecondsToTime(time, sTimeString, sizeof(sTimeString), true);
+public GetTotalRankFinishCallback(Handle:owner, Handle:hQuery, const String:sError[], any:client)
+{
+	if (hQuery == INVALID_HANDLE)
+	{
+		Timer_LogError("SQL Error on GetTotalRankFinish: %s", sError);
+		return;
+	}
+	else
+	{
+		g_iTotalRankCache = SQL_GetRowCount(hQuery);
+		
+		if(cacheFinishes[client][PreviousTime] == 0.0)
+		{
+			cacheFinishes[client][PreviousTime] = cacheFinishes[client][Time];
+		}
+		
+		decl String:sQuery[512];
+		FormatEx(sQuery, sizeof(sQuery), "SELECT m.id, m.auth, m.time, MAX(m.jumps) jumps, m.physicsdifficulty, m.name FROM round AS m INNER JOIN (SELECT MIN(n.time) time, n.auth FROM round n WHERE n.map = '%s' AND n.time <= %f GROUP BY n.physicsdifficulty, n.auth) AS j ON (j.time = m.time AND j.auth = m.auth) WHERE m.map = '%s' AND m.time <= %f GROUP BY m.physicsdifficulty, m.auth", g_sCurrentMap, cacheFinishes[client][PreviousTime] + 0.0001, g_sCurrentMap, cacheFinishes[client][PreviousTime] + 0.0001);
+		
+		SQL_TQuery(g_hSQL, GetCurrentRankFinishCallback, sQuery, client);
+	}
+}
 
-	Call_StartForward(g_hFinishRoundForward);
-	Call_PushCell(client);
-	Call_PushString(map);
-	Call_PushCell(jumps);
-	Call_PushCell(flashbangs);
-	Call_PushCell(physicsDifficulty);
-	Call_PushCell(fpsmax);
-	Call_PushString(sTimeString);
-	Call_PushString(sTimeDiff);
-	Call_PushCell(Timer_GetCurrentRank(client, false));
-	Call_PushCell(Timer_GetTotalRank(false));
-	Call_PushCell(bOverwrite);
-	Call_Finish();
+public GetCurrentRankFinishCallback(Handle:owner, Handle:hQuery, const String:sError[], any:client)
+{
+	if (hQuery == INVALID_HANDLE)
+	{
+		Timer_LogError("SQL Error on GetCurrentRankFinish: %s", sError);
+		return;
+	}
+	else
+	{
+		g_iCurrentRankCache[client] = SQL_GetRowCount(hQuery);
+		
+		decl String:sTimeString[32];
+		Timer_SecondsToTime(cacheFinishes[client][Time], sTimeString, sizeof(sTimeString), true);
+
+		Call_StartForward(g_hFinishRoundForward);
+		Call_PushCell(client);
+		Call_PushString(g_sCurrentMap);
+		Call_PushCell(cacheFinishes[client][Jumps]);
+		Call_PushCell(cacheFinishes[client][Flashbangs]);
+		Call_PushCell(cacheFinishes[client][PhysicsDifficultyTemp]);
+		Call_PushCell(cacheFinishes[client][Fpsmax]);
+		Call_PushString(sTimeString);
+		Call_PushString(timeDiffCache);
+		Call_PushCell(Timer_GetCurrentRank(client, false));
+		Call_PushCell(Timer_GetTotalRank(false));
+		Call_PushCell(cacheFinishes[client][BOverwrite]);
+		Call_Finish();
+	}
 }
 
 GetTotalRank(const String:map[])
 {
-	decl String:sQuery[448], String:sError[255];
+	decl String:sQuery[448];
 	FormatEx(sQuery, sizeof(sQuery), "SELECT m.id, m.auth, m.time, MAX(m.jumps) jumps, m.physicsdifficulty, m.name FROM round AS m INNER JOIN (SELECT MIN(n.time) time, n.auth FROM round n WHERE n.map = '%s' GROUP BY n.physicsdifficulty, n.auth) AS j ON (j.time = m.time AND j.auth = m.auth) WHERE m.map = '%s' GROUP BY m.physicsdifficulty, m.auth", map, map);
 	
-	SQL_LockDatabase(g_hSQL);
+	SQL_TQuery(g_hSQL, GetTotalRankCallback, sQuery, _);
+}
 
-	new Handle:hQuery = SQL_Query(g_hSQL, sQuery);
-	
+public GetTotalRankCallback(Handle:owner, Handle:hQuery, const String:sError[], any:client)
+{
 	if (hQuery == INVALID_HANDLE)
 	{
-		SQL_GetError(g_hSQL, sError, sizeof(sError));
 		Timer_LogError("SQL Error on GetTotalRank: %s", sError);
-		SQL_UnlockDatabase(g_hSQL);
 		return;
 	}
-
-	SQL_UnlockDatabase(g_hSQL); 
-
-	g_iTotalRankCache = SQL_GetRowCount(hQuery);
-	
-	CloseHandle(hQuery);
+	else
+	{
+		g_iTotalRankCache = SQL_GetRowCount(hQuery);
+	}
 }
 
 GetCurrentRank(client, const String:map[])
 {
-	decl String:sQuery[512], String:sError[255];
+	decl String:sQuery[512];
 	FormatEx(sQuery, sizeof(sQuery), "SELECT m.id, m.auth, m.time, MAX(m.jumps) jumps, m.physicsdifficulty, m.name FROM round AS m INNER JOIN (SELECT MIN(n.time) time, n.auth FROM round n WHERE n.map = '%s' AND n.time <= %f GROUP BY n.physicsdifficulty, n.auth) AS j ON (j.time = m.time AND j.auth = m.auth) WHERE m.map = '%s' AND m.time <= %f GROUP BY m.physicsdifficulty, m.auth", map, g_bestTimeCache[client][Time] + 0.0001, map, g_bestTimeCache[client][Time] + 0.0001);
 
-	SQL_LockDatabase(g_hSQL);
+	SQL_TQuery(g_hSQL, GetCurrentRankCallback, sQuery, client);
+}
 
-	new Handle:hQuery = SQL_Query(g_hSQL, sQuery);
-	
+public GetCurrentRankCallback(Handle:owner, Handle:hQuery, const String:sError[], any:client)
+{
 	if (hQuery == INVALID_HANDLE)
 	{
-		SQL_GetError(g_hSQL, sError, sizeof(sError));
 		Timer_LogError("SQL Error on GetCurrentRank: %s", sError);
-		SQL_UnlockDatabase(g_hSQL);
 		return;
 	}
-
-	SQL_UnlockDatabase(g_hSQL); 
-	
-	g_iCurrentRankCache[client] = SQL_GetRowCount(hQuery);
-	
-	CloseHandle(hQuery);
+	else
+	{
+		g_iCurrentRankCache[client] = SQL_GetRowCount(hQuery);
+	}
 }
 
 Float:CalculateTime(client)
