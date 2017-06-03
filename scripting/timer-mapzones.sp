@@ -249,14 +249,6 @@ public OnAdminMenuReady(Handle:topmenu)
 AddMapZone(String:map[], MapZoneType:type, Float:point1[3], Float:point2[3])
 {
 	decl String:sQuery[512];
-	
-	if (type == Start || type == End)
-	{
-		decl String:sDeleteQuery[128];
-		FormatEx(sDeleteQuery, sizeof(sDeleteQuery), "DELETE FROM mapzone WHERE map = '%s' AND type = %d;", map, type);
-
-		SQL_TQuery(g_hSQL, AddMapZoneCallback, sDeleteQuery, _, DBPrio_High);	
-	}
 
 	FormatEx(sQuery, sizeof(sQuery), "INSERT INTO mapzone (map, type, point1_x, point1_y, point1_z, point2_x, point2_y, point2_z) VALUES ('%s', '%d', %f, %f, %f, %f, %f, %f);", map, type, point1[0], point1[1], point1[2], point2[0], point2[1], point2[2]);
 
