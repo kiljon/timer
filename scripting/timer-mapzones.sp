@@ -87,6 +87,9 @@ public OnPluginStart()
 	HookConVarChange(g_hCvarStopPrespeed, Action_OnSettingsChange);
 	HookConVarChange(g_hCvarDrawMapZones, Action_OnSettingsChange);
 	
+	RegAdminCmd("sm_addmapzone", Command_AddMapZone, ADMFLAG_BAN, "sm_addmapzone");
+	RegAdminCmd("sm_deletemapzone", Command_DeleteMapZone, ADMFLAG_BAN, "sm_deletemapzone");
+	
 	AutoExecConfig(true, "timer-mapzones");
 	
 	g_bStopPrespeed = GetConVarBool(g_hCvarStopPrespeed);
@@ -472,6 +475,22 @@ public AdminMenu_RemoveAllMapZones(Handle:topmenu,  TopMenuAction:action, TopMen
 	{
 		DeleteAllMapZones(param);
 	}
+}
+
+public Action:Command_AddMapZone(client, args)
+{	
+	RestartMapZoneEditor(client);
+	g_mapZoneEditors[client][Step] = 1;
+	DisplaySelectPointMenu(client, 1);
+
+	return Plugin_Handled;
+}
+
+public Action:Command_DeleteMapZone(client, args)
+{
+	DeleteMapZone(client);
+
+	return Plugin_Handled;
 }
 
 RestartMapZoneEditor(client)
